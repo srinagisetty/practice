@@ -1,0 +1,44 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: testapp
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: testapp
+  template:
+    metadata:
+      labels:
+        app: testapp
+        environment: dev
+    spec:
+      containers:
+        - name: testapp
+          image: learningpoint.azurecr.io/test/nodejs:latest
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          ports:
+            - containerPort: 8080
+      imagePullSecrets:
+      - name: learningpoint
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: testapp
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 8080
+  selector:
+    app: testapp

@@ -1,0 +1,176 @@
+# Docker
+# Build and push an image to Azure Container Registry
+# https://docs.microsoft.com/azure/devops/pipelines/languages/docker
+
+trigger:
+  branches:
+    include:
+      - master
+    exclude:
+      - azure-pipelines-dev.yml
+
+pool: 
+  name: 'Default'
+  demands:
+  - agent.os -equals Linux
+
+resources:
+- repo: self
+
+variables:
+  # Container registry service connection established during pipeline creation
+  dockerRegistryServiceConnection: '00342d0e-90ff-4bcc-b5ff-083733c76a93'
+  imageRepository: 'demo_cloudpse/mysampleapp'
+  containerRegistry: 'sgsin01acr01.azurecr.io'
+  dockerfilePath: '**/Dockerfile'
+  tag: 'latest'
+
+  # Agent VM image name
+  vmImageName: 'ubuntu-latest'
+
+stages:
+- stage: Build
+  displayName: Build and push stage
+  jobs:
+  - job: Build
+    displayName: Build
+    steps:
+
+    - task: CmdLine@2
+      inputs:
+        script: |
+          echo > Dockerfile
+          
+          cat > Dockerfile <<EOF
+          ### STAGE 1: Build ###
+          # Get the base node image
+          # Use the official Node.js v14.x image as the base image
+          FROM node:lts-alpine
+
+          # Set the working directory in the container to /app
+          WORKDIR /app
+
+          # Copy the package.json and package-lock.json files to the container
+          COPY package*.json ./
+
+          # Install the dependencies from the package.json file
+          RUN npm install
+
+          # Copy the rest of the application code to the container
+          COPY . .
+
+          # Expose the port that the application will listen on
+          EXPOSE 8080
+
+          # Start the application when the container starts
+          CMD ["npm", "start"]
+
+          EOF
+
+    - task: CmdLine@2
+      inputs:
+        script: |
+          mkdir manifests
+          
+          cd manifests
+          
+          echo > deployment.yml
+          
+          cat > deployment.yml <<EOF
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: testapp
+          spec:
+            replicas: 1
+            strategy:
+              type: RollingUpdate
+            selector:
+              matchLabels:
+                app: testapp
+            template:
+              metadata:
+                labels:
+                  app: testapp
+                  environment: dev
+                  project: pwr
+                  service: testapp
+              spec:
+                containers:
+                  - name: testapp
+                    image: sgsin01acr01.azurecr.io/demo_cloudpse/mysampleapp:latest
+                    resources:
+                      requests:
+                        cpu: 100m
+                        memory: 128Mi
+                      limits:
+                        cpu: 250m
+                        memory: 256Mi
+                    ports:
+                      - containerPort: 8080
+                nodeSelector:
+                  nodepool: workload
+                  environment: development
+          EOF
+          
+          echo > service.yml
+          
+          cat > service.yml <<EOF
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: testapp
+          spec:
+            type: LoadBalancer
+            ports:
+              - port: 8080
+            selector:
+              app: testapp
+          EOF
+
+          # echo > ingress.yml
+          # cat > ingress.yml <<EOF
+          # apiVersion: networking.k8s.io/v1
+          # kind: Ingress
+          # metadata:
+          #   name: test-ingress
+          #   namespace: democloudpse-dev
+          #   annotations:
+          #     # kubernetes.io/ingress.class: azure/application-gateway-private
+          #     # # appgw.ingress.kubernetes.io/override-frontend-port: "8080"
+          #     kubernetes.io/ingress.class: azure/application-gateway
+          #     #appgw.ingress.kubernetes.io/use-private-ip: "true"
+          #     appgw.ingress.kubernetes.io/request-timeout: "600"
+          #     # appgw.ingress.kubernetes.io/appgw-ssl-certificate: "pwrdev_worley"
+          # spec:
+          #   rules:
+          #     http:
+          #       paths:
+          #       - path: /
+          #         pathType: Exact
+          #         backend:
+          #             service:
+          #               name: testapp
+          #               port: 
+          #                 number: 8080
+          # EOF
+
+    - task: Docker@2
+      displayName: Build and push an image to container registry
+      inputs:
+        command: buildAndPush
+        repository: $(imageRepository)
+        dockerfile: $(dockerfilePath)
+        containerRegistry: $(dockerRegistryServiceConnection)
+        tags: |
+          $(tag)
+        
+    - task: PublishPipelineArtifact@1
+      inputs:
+        targetPath: '$(Pipeline.Workspace)'
+        artifact: 'pwr_aj_frontend_dev'
+        publishLocation: 'pipeline'
+        
+    - task: CmdLine@2
+      inputs:
+        script: 'docker rmi -f $(docker images -a -q)'
